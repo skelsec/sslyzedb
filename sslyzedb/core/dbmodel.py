@@ -1,5 +1,6 @@
 import enum
 
+from sslyze.ssl_settings import TlsWrappedProtocolEnum
 from nassl.ssl_client import OpenSslVersionEnum
 from sslyze.plugins.robot_plugin import RobotScanResultEnum
 from sslyze.plugins.certificate_info_plugin import OcspResponseStatusEnum 
@@ -22,6 +23,7 @@ from sslyze.plugins.robot_plugin import RobotScanCommand
 from sslyze.plugins.early_data_plugin import EarlyDataScanCommand
 
 from datetime import datetime, timedelta, timezone
+import ipaddress
 from .. import logger
 
 Basemodel = declarative_base()
@@ -138,7 +140,7 @@ class Target(Basemodel):
 	ip_address = Column(String)
 	domain_name = Column(String)
 	port = Column(Integer)
-	protocol = Column(Integer)
+	protocol = Column(Enum(TlsWrappedProtocolEnum))
 
 	def get_addr(self):
 		return self.domain_name if self.domain_name is not None else self.ip_address
@@ -160,13 +162,13 @@ class Target(Basemodel):
 			ipaddress.ip_address(address)
 			target = Target(ip_address = address, port = port)
 		except Exception as e:
-			print(e)
+			logger.debug('Target parsing - its normal to get errors here Exc: %s' % e)
 			target = Target(domain_name = address, port = port)
 			pass		
 		
 		return target
 
-	def __init__(self, ip_address = None, domain_name = None, port = None, protocol = 1):
+	def __init__(self, ip_address = None, domain_name = None, port = None, protocol = TlsWrappedProtocolEnum.PLAIN_TLS):
 		self.ip_address = ip_address
 		self.port = port
 		self.domain_name = domain_name
@@ -188,6 +190,10 @@ class Scan(Basemodel):
 	id = Column(Integer, primary_key=True)
 	project_id = Column(Integer, ForeignKey('projects.id'))
 	started_at = Column(DateTime, default=datetime.utcnow)
+	network_retries = Column(Integer, default = 3)
+	network_timeout = Column(Integer, default = 5)
+	max_processes_nb = Column(Integer, default = 12)
+	max_processes_per_hostname_nb = Column(Integer, default = 3)
 
 
 	targets = relationship("Target", secondary=scan_targets_table,back_populates="scans", lazy='dynamic')
@@ -199,6 +205,7 @@ class ScanCommand(Basemodel):
 	scan_id = Column(Integer, ForeignKey('scans.id'))
 	command = Column(Enum(SSLYZECommand))
 	scan = relationship("Scan", back_populates="scan_commands")
+	
 
 
 ####################################################################################

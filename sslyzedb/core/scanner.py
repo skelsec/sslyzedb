@@ -18,7 +18,7 @@ from sslyze.plugins.session_resumption_plugin import SessionResumptionSupportSca
 from sslyze.plugins.robot_plugin import RobotScanCommand 
 from sslyze.plugins.early_data_plugin import EarlyDataScanCommand 
 
-
+import tqdm
 
 from .. import logger
 from .dbmodel import *
@@ -31,7 +31,7 @@ def create_server_info(target):
 	server_tester = ServerConnectivityTester(
 		hostname=target.domain_name if target.domain_name is not None else target.ip_address,
 		port=target.port,
-		tls_wrapped_protocol=TlsWrappedProtocolEnum(target.protocol)
+		tls_wrapped_protocol=target.protocol
 	)
 	logger.debug(f'\nTesting connectivity with {server_tester.hostname}:{server_tester.port}...')
 	try:
@@ -40,17 +40,45 @@ def create_server_info(target):
 		logger.debug('Falied to connect to server %s:%d' % (target.domain_name if target.domain_name is not None else target.ip_address, target.port))
 		raise e
 	return server_info
+	
+def get_results(concurrent_scanner, with_progressbar = False, total_results = 0):
+	if with_progressbar == True:
+		for scan_result in tqdm.tqdm(concurrent_scanner.get_results(), total = total_results, desc='Scanning targets'):
+			yield scan_result
+	else:
+		for scan_result in concurrent_scanner.get_results():
+			yield scan_result
+	
+def enum_targets(session, scan_id, with_progressbar = False):
+	if with_progressbar == True:
+		"""
+		WARINING! If total is large then count command might slow down the query!!!
+		"""
+		total = session.query(Target).filter(scan_id == scan_id).count()
+		for target in tqdm.tqdm(session.query(Target).filter(scan_id == scan_id), total = total, desc='Initializing targets'):
+			yield target
+	else:
+		for target in session.query(Target).filter(scan_id == scan_id):
+			yield target
 
-def start_scanner(session, scan_id):
+def start_scanner(session, scan_id, with_progressbar = False):
 	"""
 	takes database session and project id, creates a scan id and start scanning for all targets belonging to project
 	"""
 	logger.log(1, 'create_server_info called')
 	logger.debug('enumerating targets')
 	
-	concurrent_scanner = ConcurrentScanner()
+	total_results = 0
+
+
+	network_retries = 3
+	network_timeout = 5
+	max_processes_nb = 12
+	max_processes_per_hostname_nb = 3
+	
 	scan = session.query(Scan).get(scan_id)
-	for target in session.query(Target).filter(scan_id == scan_id):
+	concurrent_scanner = ConcurrentScanner(scan.network_retries, scan.network_timeout, scan.max_processes_nb, scan.max_processes_per_hostname_nb)
+	for target in enum_targets(session, scan_id, with_progressbar):
 		try:
 			server_info = create_server_info(target)
 		except Exception as e:
@@ -85,11 +113,12 @@ def start_scanner(session, scan_id):
 		for command in commands:
 			for c in command_map[command]:
 				concurrent_scanner.queue_scan_command(server_info, c())
+				total_results += 1
 
 
 	logger.debug('Starting scanner!')
 
-	for scan_result in concurrent_scanner.get_results():
+	for scan_result in get_results(concurrent_scanner, with_progressbar, total_results):
 		logger.debug(f'\nReceived result for "{scan_result.scan_command.get_title()}" '
 			  f'on {scan_result.server_info.hostname}')
 		logger.debug('ID: %s' % scan_result.server_info.target_id)
@@ -263,4 +292,3 @@ def start_scanner(session, scan_id):
 			session.commit()
 
 	session.commit()
-	session.close()

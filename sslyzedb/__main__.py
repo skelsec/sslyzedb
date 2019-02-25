@@ -39,11 +39,15 @@ def run():
 
 	createscan_group = subparsers.add_parser('createscan', help='Creates a new scan and adds targets')
 	createscan_group.add_argument('projectid', help='Project id that defines the scope')
+	createscan_group.add_argument('--retries', type=int, default = 3, help='How many times a host should be probed in case network fails')
+	createscan_group.add_argument('--timeout', type=int, default = 5, help='Timeout in seconds to be waiting for a host')
+	createscan_group.add_argument('--processes', type=int, default = 12, help='Number of processes (threads) used for scanning')
+	createscan_group.add_argument('--processes-per-hostname', type=int, default = 3, help='Maximum number of parallel scanning processes per host')
 
 	addtarget_group = subparsers.add_parser('addtarget', help='Adds target(s) to scan id')
 	addtarget_group.add_argument('scanid', help='Project id that defines the scope')
-	addtarget_group.add_argument('source', nargs='?', choices=['file', 'stdin'], help='Database commands.')
-	addtarget_group.add_argument('rest', nargs=argparse.REMAINDER)
+	addtarget_group.add_argument('-t', '--target', action='append', help='Hostname or IP of target, in <host/ip>:<port> format. if port not supplied, 443 will be used as default.')
+	addtarget_group.add_argument('-f', '--target_file', action='append', help='targets file, one target per line. target format is the same as for -t')
 
 	addcmd_group = subparsers.add_parser('addcommand', help='Adds command(s) to scan id')
 	addcmd_group.add_argument('scanid', help='Project id that defines the scope')
@@ -51,10 +55,19 @@ def run():
 
 	scan_group = subparsers.add_parser('scan', help='Start scanning')
 	scan_group.add_argument('scanid', help='Scan id that defines the scope')
+	scan_group.add_argument('-p', '--progress-bar', action='store_true', help='Show progress bar for scanning')
 
 	report_group = subparsers.add_parser('report', help='Generate report')
 	report_group.add_argument('scanid', help='Scan id that defines the scope')
 	report_group.add_argument('-o', '--outfile', help='File to write the report to, otherwise STDOUT')
+	report_group.add_argument('--full-report', action='store_true', help='Causes all ciphers to be inculded in the report')
+	
+	quick_group = subparsers.add_parser('quick', help='Generate report')
+	quick_group.add_argument('-t', '--target', action='append', help='Hostname or IP of target, in <host/ip>:<port> format. if port not supplied, 443 will be used as default.')
+	quick_group.add_argument('-f', '--target_file', action='append', help='targets file, one target per line. target format is the same as for -t')
+	quick_group.add_argument('-o', '--outfile', help='File to write the report to, otherwise STDOUT')
+	quick_group.add_argument('--full-report', action='store_true', help='Causes all ciphers to be inculded in the report')
+	quick_group.add_argument('-p', '--progress-bar', action='store_true', help='Show progress bar for scanning')
 
 	args = parser.parse_args()
 	
@@ -95,6 +108,10 @@ def run():
 		logging.debug('Creating scan')
 		project = session.query(Project).get(args.projectid)
 		scan = Scan()
+		scan.network_retries = args.retries
+		scan.network_timeout = args.timeout
+		scan.max_processes_nb = args.processes
+		scan.max_processes_per_hostname_nb = args.processes_per_hostname
 		session.add(scan)
 		session.commit()
 		session.refresh(scan)
@@ -102,25 +119,24 @@ def run():
 		logging.debug('Created scan with ID %s' % scan.id)
 
 	elif args.command == 'addtarget':
+		if not args.target_file and not args.target:
+			print('Not targets supplied! Use either -t or -f')
+			sys.exit(1)
+			
 		conn = get_connection_string(args)
 		session = get_session(conn, args.verbose)
 		scan = session.query(Scan).get(args.scanid)
-		if args.source == 'file':
-			try:
-				for filename in args.rest:
-					with open(filename, 'r') as f:
-						for line in f:
-							line = line.strip()
-							target = Target.from_line(line)
-							scan.targets.append(target)
-
-			except Exception as e:
-				logging.exception('Failed to parse targets file!')
-				sys.exit()
+		
+		if args.target_file:
+			for filename in args.target_file:
+				with open(filename, 'r') as f:
+					for line in f:
+						line = line.strip()
+						target = Target.from_line(line)
+						scan.targets.append(target)
 			
-
-		else:
-			for targetentry in args.rest:
+		if args.target:
+			for targetentry in args.target:
 				target = Target.from_line(targetentry)
 				scan.targets.append(target)
 		session.add(scan)
@@ -146,14 +162,13 @@ def run():
 		conn = get_connection_string(args)
 		session = get_session(conn, args.verbose)
 		logging.debug('Starting scan')
-
-		start_scanner(session, args.scanid)
+		start_scanner(session, args.scanid, args.progress_bar)
 
 	elif args.command == 'report':
 		conn = get_connection_string(args)
 		session = get_session(conn, args.verbose)
 		logging.debug('Starting reporting')
-		data_lines = generate_report(session, args.scanid)
+		data_lines = generate_report(session, args.scanid, args.full_report)
 		if args.outfile is not None:
 			with open(args.outfile,'wb') as f:
 				for line in data_lines:
@@ -161,6 +176,66 @@ def run():
 		else:
 			for line in data_lines:
 				print('\t'.join(line))
+				
+	elif args.command == 'quick':
+		if not args.target_file and not args.target:
+			print('Not targets supplied! Use either -t or -f')
+			sys.exit(1)
+		conn = get_connection_string(args)
+		create_db(conn, args.verbose)
+		session = get_session(conn, args.verbose)
+		logging.debug('Creating project')
+		project = Project('quick','')
+		session.add(project)
+		session.commit()
+		session.refresh(project)
+		logging.info('Created project with ID %s' % project.id)
+		logging.debug('Creating scan')
+		project = session.query(Project).get(project.id)
+		scan = Scan()
+		session.add(scan)
+		session.commit()
+		session.refresh(scan)
+		logging.debug('Created scan with ID %s' % scan.id)
+		scan = session.query(Scan).get(scan.id)
+		
+		if args.target_file:
+			for filename in args.target_file:
+				with open(filename, 'r') as f:
+					for line in f:
+						line = line.strip()
+						target = Target.from_line(line)
+						scan.targets.append(target)	
+
+		if args.target:
+			for targetentry in args.target:
+				target = Target.from_line(targetentry)
+				scan.targets.append(target)
+				
+		session.add(scan)
+		session.commit()
+		scan = session.query(Scan).get(scan.id)
+		c = SSLYZECommand.ALL
+		sc = ScanCommand()
+		sc.scan_id = scan.id
+		sc.command = c
+		session.add(sc)
+		session.commit()
+		logging.debug('Commands added')
+		logging.debug('Starting scan')
+
+		start_scanner(session, scan.id, args.progress_bar)
+		session = get_session(conn, args.verbose)
+		scan = session.query(Scan).get(scan.id)
+		data_lines = generate_report(session, scan.id, args.full_report)
+		if args.outfile is not None:
+			with open(args.outfile,'wb') as f:
+				for line in data_lines:
+					f.write('\t'.join(line).encode() + b'\r\n')
+		else:
+			for line in data_lines:
+				print('\t'.join(line))
+
 
 if __name__ == '__main__':
 	run()

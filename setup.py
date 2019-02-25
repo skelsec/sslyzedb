@@ -5,7 +5,7 @@ setup(
 	name="sslyzedb",
 
 	# Version number (initial):
-	version="0.0.1",
+	version="0.0.2",
 
 	# Application author details:
 	author="Tamas Jos",
@@ -37,6 +37,7 @@ setup(
 	install_requires=[
 		'sslyze',
 		'sqlalchemy',
+		'tqdm',
 	],
 	entry_points={
 		'console_scripts': [

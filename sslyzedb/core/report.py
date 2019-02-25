@@ -12,6 +12,12 @@ class FullResult:
 				'accepts_client_renegotiation', 'supports_secure_renegotiation', 'robot_result', 'is_early_data_supported', 'SSLV23', \
 				'SSLV2','SSLV3','TLSV1', 'TLSV1_1', 'TLSV1_2', 'TLSV1_3'
 				]
+				
+	HEADER_FULL = ['target','compression_supported','supports_fallback_scsv', 'is_vulnerable_to_heartbleed',  'is_vulnerable_to_ccs_injection', \
+				'accepts_client_renegotiation', 'supports_secure_renegotiation', 'robot_result', 'is_early_data_supported', 'SSLV23', \
+				'SSLV2','SSLV3','TLSV1', 'TLSV1_1', 'TLSV1_2', 'TLSV1_3', 'SSLV23_accepted_ciphers', 'SSLV2_accepted_ciphers','SSLV3_accepted_ciphers',\
+				'TLSV1_accepted_ciphers', 'TLSV1_1_accepted_ciphers', 'TLSV1_2_accepted_ciphers', 'TLSV1_3_accepted_ciphers'
+				]
 
 
 	def __init__(self):
@@ -31,10 +37,18 @@ class FullResult:
 		self.TLSV1_1 = None
 		self.TLSV1_2 = None
 		self.TLSV1_3 = None
+		
+		self.SSLV23_ciphers  = []
+		self.SSLV2_ciphers   = []
+		self.SSLV3_ciphers   = []
+		self.TLSV1_ciphers   = []
+		self.TLSV1_1_ciphers = []
+		self.TLSV1_2_ciphers = []
+		self.TLSV1_3_ciphers = []
 
-		self.accepted_ciphers = []
-		self.rejected_ciphers = []
-		self.errored_ciphers = []
+		self.accepted_ciphers = {}
+		self.rejected_ciphers = {}
+		self.errored_ciphers = {}
 
 	def from_db(session, scanid):
 		scanid = int(scanid)
@@ -64,22 +78,36 @@ class FullResult:
 			fr.is_vulnerable_to_ccs_injection = is_vulnerable_to_ccs_injection
 			fr.accepts_client_renegotiation = accepts_client_renegotiation
 			fr.supports_secure_renegotiation = supports_secure_renegotiation
-			fr.robot_result = robot_result_enum
+			fr.robot_result = robot_result_enum.name if robot_result_enum else 'N/A'
 			fr.is_early_data_supported = is_early_data_supported
 
 			
 			logger.debug('Report queriing for target supported ciphers')
 			cipersuiteres = session.query(CipherSuiteScanResult.id).filter(CipherSuiteScanResult.target_id == target.id).filter(CipherSuiteScanResult.scan_id == scanid)
-			for ac in session.query(AcceptedCipherSuite.ssl_version).filter(AcceptedCipherSuite.ciphersuiterestuls_id.in_(cipersuiteres)).group_by(AcceptedCipherSuite.ssl_version).all():
-				fr.accepted_ciphers.append(ac[0])
-			
+			for ac in session.query(AcceptedCipherSuite.ssl_version, AcceptedCipherSuite.name).filter(AcceptedCipherSuite.ciphersuiterestuls_id.in_(cipersuiteres)).all():
+				fr.accepted_ciphers[ac[0]] = 1
+				if ac[0] == OpenSslVersionEnum.SSLV23:
+					fr.SSLV23_ciphers.append(ac[1])
+				elif ac[0] == OpenSslVersionEnum.SSLV2:
+					fr.SSLV2_ciphers.append(ac[1])
+				elif ac[0] == OpenSslVersionEnum.SSLV3:
+					fr.SSLV3_ciphers.append(ac[1])
+				elif ac[0] == OpenSslVersionEnum.TLSV1:
+					fr.TLSV1_ciphers.append(ac[1])
+				elif ac[0] == OpenSslVersionEnum.TLSV1_1:
+					fr.TLSV1_1_ciphers.append(ac[1])
+				elif ac[0] == OpenSslVersionEnum.TLSV1_2:
+					fr.TLSV1_2_ciphers.append(ac[1])
+				elif ac[0] == OpenSslVersionEnum.TLSV1_3:
+					fr.TLSV1_3_ciphers.append(ac[1])
+				
 			logger.debug('Report queriing for target rejected ciphers')
-			for rc in session.query(RejectedCipherSuite.ssl_version).filter(RejectedCipherSuite.ciphersuiterestuls_id.in_(cipersuiteres)).group_by(RejectedCipherSuite.ssl_version).all():
-				fr.rejected_ciphers.append(rc[0])
+			for rc in session.query(RejectedCipherSuite.ssl_version, RejectedCipherSuite.name).filter(RejectedCipherSuite.ciphersuiterestuls_id.in_(cipersuiteres)).group_by(RejectedCipherSuite.ssl_version).all():
+				fr.rejected_ciphers[rc[0]] = 1
 
 			logger.debug('Report queriing for target errored ciphers')
-			for ec in session.query(RejectedCipherSuite.ssl_version).filter(RejectedCipherSuite.ciphersuiterestuls_id.in_(cipersuiteres)).group_by(RejectedCipherSuite.ssl_version).all():
-				fr.errored_ciphers.append(ec[0])
+			for ec in session.query(RejectedCipherSuite.ssl_version, RejectedCipherSuite.name).filter(RejectedCipherSuite.ciphersuiterestuls_id.in_(cipersuiteres)).group_by(RejectedCipherSuite.ssl_version).all():
+				fr.errored_ciphers[ec[0]] = 1
 
 			fr.get_cipher_status()
 			results.append(fr)
@@ -124,10 +152,19 @@ class FullResult:
 		t['TLSV1_1'] = a(self.TLSV1_1)
 		t['TLSV1_2'] = a(self.TLSV1_2)
 		t['TLSV1_3'] = a(self.TLSV1_3)
+		
+		t['SSLV23_accepted_ciphers'] = b(self.SSLV23_ciphers)
+		t['SSLV2_accepted_ciphers'] = b(self.SSLV2_ciphers)
+		t['SSLV3_accepted_ciphers'] = b(self.SSLV3_ciphers)
+		t['TLSV1_accepted_ciphers'] = b(self.TLSV1_ciphers)
+		t['TLSV1_1_accepted_ciphers'] = b(self.TLSV1_1_ciphers)
+		t['TLSV1_2_accepted_ciphers'] = b(self.TLSV1_2_ciphers)
+		t['TLSV1_3_accepted_ciphers'] = b(self.TLSV1_3_ciphers)		
+		
 		return t
 
-	def get_hdr():
-		return FullResult.HEADER
+	def get_hdr(full = False):
+		return FullResult.HEADER if full == False else FullResult.HEADER_FULL
 
 	def get_row(self, attrs):
 		t = self.to_dict()
@@ -136,11 +173,12 @@ class FullResult:
 	def to_tsv(self, separator = '\t'):
 		return separator.join(self.get_row(FullResult.get_hdr()))
 
-def generate_report(session, scanid):
+def generate_report(session, scanid, full_report = False):
 	logger.debug('generate_report')
 	results = FullResult.from_db(session, scanid)
 	data = []
-	data.append(FullResult.get_hdr())
+	data.append(FullResult.get_hdr(full_report))
 	for res in results:
-		data.append(res.get_row(FullResult.get_hdr()))
+		data.append(res.get_row(FullResult.get_hdr(full_report)))
+		
 	return data
